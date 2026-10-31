@@ -1,0 +1,25 @@
+EDB Postgres for Kubernetes Cluster "{{ include "edb-database-cluster.clusterName" . }}" has been requested.
+
+This chart only creates the Cluster custom resource (and its credential Secrets) -
+it requires the edb-postgres-for-kubernetes operator and its CRDs to already be
+installed in this cluster.
+
+Check the status of the cluster with:
+
+  kubectl get cluster {{ include "edb-database-cluster.clusterName" . }} -n {{ .Release.Namespace }}
+  kubectl describe cluster {{ include "edb-database-cluster.clusterName" . }} -n {{ .Release.Namespace }}
+
+{{- if .Values.secrets.appUser.create }}
+
+Retrieve the application user credentials with:
+
+  kubectl get secret {{ include "edb-database-cluster.appUserSecretName" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.username}' | base64 -d
+  kubectl get secret {{ include "edb-database-cluster.appUserSecretName" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.password}' | base64 -d
+{{- end }}
+{{- if and .Values.cluster.enableSuperuserAccess .Values.secrets.superuser.create }}
+
+Retrieve the superuser credentials with:
+
+  kubectl get secret {{ include "edb-database-cluster.superuserSecretName" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.username}' | base64 -d
+  kubectl get secret {{ include "edb-database-cluster.superuserSecretName" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.password}' | base64 -d
+{{- end }}

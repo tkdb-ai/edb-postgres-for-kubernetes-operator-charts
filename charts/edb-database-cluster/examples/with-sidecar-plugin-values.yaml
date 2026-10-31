@@ -1,0 +1,59 @@
+# Example values for this chart's cnpg-i-sidecar plugin registration
+# (https://github.com/tkdb-ai/cnpg-i-sidecar) - e.g. to run a supercronic
+# sidecar for cron-scheduled maintenance scripts, replicating sidecar
+# functionality from Crunchy PGO.
+#
+# The chart's default values.yaml already registers this plugin and
+# creates its scripts ConfigMap (sidecarScripts, with an example crontab)
+# - this file shows overriding the placeholder image and the crontab/
+# scripts with real ones (and enabling the optional logExport RBAC).
+#
+# Prerequisites this values file does NOT set up for you:
+#   - The plugin's own controller must already be deployed (its own
+#     Deployment/Service, in the same namespace as the operator) - see
+#     that repo's README "Deploying" section.
+#
+# Usage:
+#   helm install my-cluster charts/edb-database-cluster -n my-namespace \
+#     -f charts/edb-database-cluster/examples/with-sidecar-plugin-values.yaml
+
+plugins:
+  - name: sidecar.tkdb.ai
+    enabled: true
+    parameters:
+      # Any image works - the plugin runs it as-is, with no command/args
+      # override. This one happens to run supercronic.
+      image: <your-registry>/supercronic-sidecar:latest
+      # Must match sidecarScripts.name below (or its default).
+      configMapName: my-cluster-scripts
+      # containerName, mountPath, exportPath all have sensible defaults -
+      # see the plugin repo's README for the full parameter list.
+      # Any "env.<NAME>" parameter adds a plain-value env var <NAME> to
+      # the sidecar - e.g. this sets LOG_LEVEL=debug:
+      env.LOG_LEVEL: debug
+
+sidecarScripts:
+  name: my-cluster-scripts
+  crontab: |
+    # minute hour day month weekday command
+    */15 * * * * /etc/sidecar/vacuum-analyze.sh
+    0 3 * * * /etc/sidecar/export-postgres-log.sh
+  scripts:
+    vacuum-analyze.sh: |
+      #!/bin/sh
+      set -eu
+      psql -v ON_ERROR_STOP=1 -c "VACUUM (ANALYZE);"
+    # See the plugin repo's doc/examples/example-export-postgres-log.sh
+    # for a worked version of this, pulling Postgres's log via the
+    # Kubernetes API and truncating the staged copy.
+    export-postgres-log.sh: |
+      #!/bin/sh
+      set -eu
+      echo "replace with your real log export + shipping logic"
+
+# Only needed if a script in the sidecar calls the Kubernetes API to pull
+# Postgres's log as a real file (e.g. to truncate and hand off to a log
+# shipper) - grants the Cluster's own ServiceAccount `get` on its own
+# pods/log.
+logExport:
+  enabled: true

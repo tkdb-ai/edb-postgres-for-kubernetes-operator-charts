@@ -1,0 +1,107 @@
+# Copyright 2021 EnterpriseDB Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+apiVersion: postgresql.k8s.enterprisedb.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "edb-database-cluster.clusterName" . }}
+  labels:
+    {{- include "edb-database-cluster.labels" . | nindent 4 }}
+    {{- with .Values.clusterLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.clusterAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  description: {{ .Values.cluster.description | quote }}
+  imageName: {{ .Values.cluster.imageName }}
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.plugins }}
+  plugins:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  instances: {{ .Values.cluster.instances }}
+  startDelay: {{ .Values.cluster.startDelay }}
+  stopDelay: {{ .Values.cluster.stopDelay }}
+  primaryUpdateStrategy: {{ .Values.cluster.primaryUpdateStrategy }}
+
+  postgresql:
+    {{- with .Values.cluster.postgresql.parameters }}
+    parameters:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.cluster.postgresql.pg_hba }}
+    pg_hba:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+
+  bootstrap:
+    initdb:
+      database: {{ .Values.cluster.bootstrap.initdb.database }}
+      owner: {{ .Values.cluster.bootstrap.initdb.owner }}
+      secret:
+        name: {{ include "edb-database-cluster.appUserSecretName" . }}
+
+  enableSuperuserAccess: {{ .Values.cluster.enableSuperuserAccess }}
+  {{- if .Values.cluster.enableSuperuserAccess }}
+  superuserSecret:
+    name: {{ include "edb-database-cluster.superuserSecretName" . }}
+  {{- end }}
+
+  storage:
+    {{- with .Values.cluster.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+    size: {{ .Values.cluster.storage.size }}
+
+  {{- if .Values.backup.enabled }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ required "backup.barmanObjectStore.destinationPath is required when backup.enabled is true" .Values.backup.barmanObjectStore.destinationPath }}
+      {{- with .Values.backup.barmanObjectStore.endpointURL }}
+      endpointURL: {{ . }}
+      {{- end }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ include "edb-database-cluster.backupSecretName" . }}
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: {{ include "edb-database-cluster.backupSecretName" . }}
+          key: ACCESS_SECRET_KEY
+      wal:
+        {{- toYaml .Values.backup.barmanObjectStore.wal | nindent 8 }}
+      data:
+        {{- toYaml .Values.backup.barmanObjectStore.data | nindent 8 }}
+    retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
+  {{- end }}
+
+  {{- with .Values.cluster.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+  {{- with .Values.cluster.affinity }}
+  affinity:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+  {{- with .Values.cluster.nodeMaintenanceWindow }}
+  nodeMaintenanceWindow:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
