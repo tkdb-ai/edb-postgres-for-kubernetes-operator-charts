@@ -1,0 +1,582 @@
+# =============================================================================
+# values-all-options.yaml
+#
+# REFERENCE ONLY - a superset of every key found in the values.yaml of:
+#
+#   [PG4K]  charts/edb-postgres-for-kubernetes          (operator, latest)
+#   [LTS]   charts/edb-postgres-for-kubernetes-lts-1-28 (operator, LTS 1.28)
+#   [PGD]   charts/edb-postgres-distributed-for-kubernetes (PGD operator)
+#   [GC]    charts/edb-cloudnativepg-global-cluster     (global-cluster operator)
+#   [DB]    charts/edb-database-cluster                 (a Cluster resource, NOT an operator)
+#
+# Each key is tagged with the charts that actually read it. Do NOT install this
+# file as-is: copy only the keys that apply to the chart you are installing.
+# Helm ignores unknown keys, but a few keys have the same name in different
+# charts with different meaning/defaults - those are called out as "DIFFERS".
+#
+# Layout:
+#   PART 1  Keys shared by the operator charts (PG4K / LTS / PGD / GC)
+#   PART 2  Keys only in some operator charts
+#   PART 3  Operator config.data options (environment variables for the operator)
+#   PART 4  edb-database-cluster chart (the Cluster, its secrets, backup, plugins)
+# =============================================================================
+
+
+# #############################################################################
+# PART 1 - SHARED OPERATOR CHART KEYS
+# #############################################################################
+
+# -- Number of operator pods. [PG4K, LTS, PGD, GC]
+# DIFFERS: default is 1 in PG4K/LTS/PGD, 2 in GC. With more than one replica,
+# leader election keeps a single pod active; the rest are hot standbys.
+replicaCount: 1
+
+# -- Operator container image. [PG4K, LTS, PGD, GC]
+# DIFFERS in key names:
+#   PG4K/LTS use:  repository, tag, pullPolicy
+#   PGD/GC use:    repository (overrides global.repository), imageName, imageTag,
+#                  imagePullPolicy
+# Both sets are listed so you can copy the one that matches your chart.
+image:
+  # -- Image repository. [PG4K, LTS, PGD, GC]
+  # PG4K/LTS: full repository path, e.g. docker.enterprisedb.com/k8s/edb-postgres-for-cloudnativepg
+  # PGD/GC:   leave "" to use global.repository; set to override it for the operator image only.
+  repository: docker.enterprisedb.com/k8s/edb-postgres-for-cloudnativepg
+  # -- Image name appended to the repository. [PGD, GC only]
+  imageName: edb-postgres-for-cloudnativepg-global-cluster
+  # -- Image tag. Empty = chart appVersion. [PG4K, LTS use `tag`]
+  tag: ""
+  # -- Image tag. Empty = chart appVersion. [PGD, GC use `imageTag`]
+  imageTag: ""
+  # -- Kubernetes pull policy: Always | IfNotPresent | Never. [PG4K, LTS use `pullPolicy`]
+  pullPolicy: IfNotPresent
+  # -- Same as pullPolicy. [PGD, GC use `imagePullPolicy`]
+  imagePullPolicy: IfNotPresent
+
+  # Optionally have the chart create the docker-registry Secret used to pull
+  # the EDB images (docker.enterprisedb.com requires a subscription token).
+  imageCredentials:
+    # -- Create the pull Secret from the values below. [PG4K, LTS, PGD, GC]
+    # DIFFERS: default false in PG4K, true in LTS/PGD/GC.
+    # If false, create the Secret yourself and reference it in imagePullSecrets.
+    create: false
+    # -- Name of the Secret that is created. Must match an entry in imagePullSecrets
+    # and config.data.PULL_SECRET_NAME.
+    name: edb-pull-secret
+    # -- Registry the credentials are for.
+    registry: docker.enterprisedb.com
+    # -- Registry username. EDB uses "k8s" together with your repo token as password.
+    username: "k8s"
+    # -- Registry password / EDB repository token. Pass with --set, never commit it.
+    password: ""
+
+# -- Secrets used to pull the operator image. [PG4K, LTS, PGD, GC]
+# DIFFERS: PG4K ships `registry-pullsecret`, others `edb-pull-secret`.
+imagePullSecrets:
+  - name: edb-pull-secret
+
+# -- Override the chart name used in resource names. [all operator charts]
+nameOverride: ""
+# -- Override the full resource name prefix entirely. [all operator charts]
+fullnameOverride: ""
+
+# -- Run the operator pod on the node's network namespace. [all operator charts]
+# Needed on some CNIs (e.g. EKS with custom CNI) so the API server can reach
+# the webhook. Leave false unless you hit webhook connectivity errors.
+hostNetwork: false
+# -- Pod dnsPolicy. Empty = Kubernetes default. [all operator charts]
+# Set to ClusterFirstWithHostNet when hostNetwork is true.
+dnsPolicy: ""
+
+crds:
+  # -- Install the CRDs with the chart. [all operator charts]
+  # DIFFERS: false in PG4K/LTS, true in PGD/GC. Set false if CRDs are managed
+  # separately (GitOps, a CRD-only chart), as helm never upgrades CRDs in crds/.
+  create: false
+
+# -- Admission webhook configuration. [all operator charts]
+webhook:
+  # -- Port the webhook server listens on.
+  port: 9443
+  mutating:
+    # -- Create the MutatingWebhookConfiguration (defaults/injection).
+    create: true
+    # -- Fail = reject requests if the webhook is unreachable; Ignore = allow them.
+    failurePolicy: Fail
+  validating:
+    # -- Create the ValidatingWebhookConfiguration (spec validation).
+    create: true
+    # -- Fail | Ignore, as above.
+    failurePolicy: Fail
+  # -- Pod eviction webhook (`vpodeviction.kb.io`). [GC only]
+  podEviction:
+    # -- Create it. Independent of webhook.validating.create.
+    create: true
+    # -- It intercepts EVERY pod eviction in the cluster: with `Fail`, an
+    # unreachable operator blocks all evictions, including node drains.
+    # Keep `Ignore` unless you know you want that.
+    failurePolicy: Ignore
+  livenessProbe:
+    # -- Seconds before the first liveness check. DIFFERS: 3 in PG4K/LTS, 15 in PGD/GC.
+    initialDelaySeconds: 3
+    # -- Seconds between checks. [PGD, GC only; default 20]
+    periodSeconds: 20
+  readinessProbe:
+    # -- Seconds before the first readiness check. DIFFERS: 3 in PG4K/LTS, 15 in PGD/GC.
+    initialDelaySeconds: 3
+    # -- Seconds between checks. [PGD, GC only; default 20]
+    periodSeconds: 20
+  startupProbe:
+    # -- Failed startup checks tolerated before the container is restarted.
+    failureThreshold: 6
+    # -- Seconds between startup checks.
+    periodSeconds: 5
+
+# -- Operator configuration stored in a ConfigMap or Secret. [all operator charts]
+# The operator reads these as environment variables (see PART 3 for every
+# supported variable).
+config:
+  # -- Create the ConfigMap/Secret from `data`. Set false to supply your own
+  # named by `config.name`. [all]
+  create: true
+  # -- Name of the ConfigMap/Secret. [all]
+  # DIFFERS: PG4K/LTS "postgresql-operator-controller-manager-config",
+  #          PGD/GC "pgd-operator-controller-manager-config".
+  name: postgresql-operator-controller-manager-config
+  # -- true = store in a Secret instead of a ConfigMap. Use this when `data`
+  # contains EDB_LICENSE_KEY or other sensitive values. [all]
+  secret: false
+  # -- true = watch all namespaces; false = only the operator's own namespace
+  # (namespaced install). [PG4K, LTS only]
+  clusterWide: true
+  # -- Operator env vars. See PART 3 for all of them.
+  data:
+    # -- Extra pull secret the operator adds to the pods it creates (Postgres
+    # instances, poolers). Must exist in the operator namespace. [all]
+    PULL_SECRET_NAME: edb-pull-secret
+    # -- Cluster labels propagated to all generated resources incl. pods. [PG4K default "project=dbaas"; LTS commented]
+    # INHERITED_LABELS: "project=dbaas"
+    # -- Image (full path) for PGD instances; overrides global.repository/pgdImageName. [PGD, GC]
+    PGD_IMAGE_NAME: ""
+    # -- Image (full path) for PGD proxy; overrides global.repository/proxyImageName. [PGD only]
+    PGD_PROXY_IMAGE_NAME: ""
+
+# -- Extra command-line args appended to the operator's args list. [all operator charts]
+# e.g. ["--log-level=debug"]
+additionalArgs: []
+
+# -- Extra environment variables for the operator container (templated). [all]
+# additionalEnv:
+#   - name: RELEASE_NAME
+#     value: "{{ .Release.Name }}"
+#   - name: MY_VAR
+#     value: "mySpecialKey"
+additionalEnv: []
+
+serviceAccount:
+  # -- Create the ServiceAccount. [all operator charts]
+  create: true
+  # -- Name to use. Empty + create=true generates one from the fullname template.
+  name: ""
+
+rbac:
+  # -- Create ClusterRole/ClusterRoleBinding (PGD/GC also Role/RoleBinding). [all]
+  create: true
+  # -- Aggregate the CRD ClusterRoles into Kubernetes' default admin/edit/view
+  # roles so namespace users get access to Cluster objects automatically. [all]
+  # https://kubernetes.io/docs/reference/access-authn-authz/rbac/#user-facing-roles
+  aggregateClusterRoles: false
+
+# -- Annotations added to every resource the chart renders. [all]
+commonAnnotations: {}
+# -- Annotations added to the operator pod. [all]
+podAnnotations: {}
+# -- Labels added to the operator pod. [all]
+podLabels: {}
+
+# -- Container security context. [all]
+# DIFFERS: PGD omits seccompProfile on the container.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+      - "ALL"
+
+# -- Pod-level security context. [all]
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+  # fsGroup: 2000
+
+# -- PriorityClass name for the operator pod (importance relative to other pods). [all]
+priorityClassName: ""
+
+# -- Webhook Service. [all]
+service:
+  # -- Service type.
+  type: ClusterIP
+  # -- DO NOT CHANGE: used to generate the webhook certificate; cannot be configured.
+  # DIFFERS: PG4K/LTS "postgresql-operator-webhook-service", PGD/GC "pgd-operator-webhook-service".
+  name: postgresql-operator-webhook-service
+  # -- Service port.
+  port: 443
+
+# -- CPU/memory requests and limits for the operator. [all]
+# Suggested starting points differ per chart:
+#   PG4K/LTS: limits 100m/200Mi,  requests 100m/100Mi
+#   PGD:      limits 500m/128Mi,  requests 10m/64Mi
+#   GC:       limits 500m/256Mi,  requests 100m/100Mi
+resources: {}
+  # limits:
+  #   cpu: 500m
+  #   memory: 256Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 100Mi
+
+# -- Node selector for the operator pod. [all]
+nodeSelector: {}
+# -- Tolerations for the operator pod. [all]
+tolerations: []
+# -- Affinity for the operator pod. [all]
+# GC: unless `affinity.podAntiAffinity` is set, a soft anti-affinity on
+# kubernetes.io/hostname spreads replicas across nodes.
+affinity: {}
+
+
+# #############################################################################
+# PART 2 - KEYS ONLY IN SOME OPERATOR CHARTS
+# #############################################################################
+
+# -- Shared image location defaults. [PGD, GC only]
+global:
+  # -- Registry/repo for the operator and operand images.
+  repository: docker.enterprisedb.com/k8s
+  # -- PGD (Postgres) image name, pulled from global.repository.
+  # DIFFERS: PGD "postgresql-pgd:17.11-pgd595-ubi9", GC "postgresql-pgd:18.6-pgd650-expanded-ubi9".
+  pgdImageName: postgresql-pgd:18.6-pgd650-expanded-ubi9
+  # -- PGD proxy image name, pulled from global.repository. [PGD only]
+  proxyImageName: edb-pgd-proxy:5.9.5-ubi9
+
+# -- Operator manager runtime config (health, metrics, leader election). [PGD, GC only]
+managerConfig:
+  name: pgd-operator-manager-config
+  data:
+    health:
+      # -- Address for health/readiness probes.
+      healthProbeBindAddress: ":9443"
+    metrics:
+      # -- Metrics endpoint bind address. 127.0.0.1 = only reachable in-pod (e.g. via a sidecar proxy).
+      bindAddress: "127.0.0.1:8080"
+    leaderElection:
+      # -- Enable leader election (needed for replicaCount > 1).
+      enabled: true
+      # -- Name of the lease/lock resource.
+      resourceName: "e72f3162.k8s.enterprisedb.io"
+
+# -- Prometheus PodMonitor for the operator. [PG4K, LTS only]
+monitoring:
+  # -- Create a PodMonitor. Requires Prometheus Operator CRDs.
+  podMonitorEnabled: false
+  # -- metricRelabelings: applied to samples before ingestion.
+  podMonitorMetricRelabelings: []
+  # -- relabelings: applied to targets before scraping.
+  podMonitorRelabelings: []
+  # -- Extra labels on the PodMonitor (e.g. `release: prometheus` so your Prometheus selects it).
+  podMonitorAdditionalLabels: {}
+
+# -- Default monitoring queries ConfigMap. [PG4K, LTS only]
+# Applied to every Cluster created by the operator (exposed by the instance
+# manager on :9187). Referenced via config.data.MONITORING_QUERIES_CONFIGMAP.
+monitoringQueriesConfigMap:
+  # -- ConfigMap name.
+  name: postgresql-operator-default-monitoring
+  # -- A YAML document (as a string) of queries. The real chart ships ~15
+  # (backends, pg_database, pg_replication, pg_stat_archiver, pg_stat_database,
+  # pg_stat_bgwriter, pg_stat_checkpointer, pg_settings, pg_extensions, ...).
+  # Only a minimal example is shown here; copy the full default from the chart.
+  # Per-query options: query, metrics[] (usage LABEL|GAUGE|COUNTER|HISTOGRAM|DISCARD),
+  # primary: true (primary only), runonserver: ">=17.0.0" (version gate),
+  # predicate_query (only run when it returns true), target_databases: ['*'].
+  queries: |
+    pg_postmaster:
+      query: |
+        SELECT EXTRACT(EPOCH FROM pg_postmaster_start_time) AS start_time
+        FROM pg_catalog.pg_postmaster_start_time()
+      metrics:
+        - start_time:
+            usage: "GAUGE"
+            description: "Time at which postgres started (based on epoch)"
+
+# -- Default monitoring ConfigMap. [PGD, GC only]
+monitoringConfigMap:
+  # -- Create it.
+  create: true
+  # -- ConfigMap name.
+  name: pgd-operator-default-monitoring
+
+# -- cert-manager subchart. [PGD, GC only]
+# Provides webhook / PGD certificates. Disable if cert-manager is already installed.
+cert-manager:
+  # -- Install cert-manager as a dependency.
+  enabled: true
+  # -- Install cert-manager CRDs with it.
+  installCRDs: true
+
+# -- Bundled PG4K LTS operator subchart (PGD/GC need the base operator). [PGD, GC only]
+# Any value from the edb-postgres-for-kubernetes-lts chart can be set here.
+edb-postgres-for-kubernetes-lts:
+  # -- Install the PG4K operator along with this chart. Disable if already installed.
+  enabled: true
+  image:
+    # -- Repository of the PG4K operator image.
+    repository: docker.enterprisedb.com/k8s/edb-postgres-for-cloudnativepg
+    imageCredentials:
+      # -- Let the subchart create its own pull secret.
+      create: false
+  crds:
+    # -- Install the PG4K CRDs.
+    create: true
+
+
+# #############################################################################
+# PART 3 - OPERATOR config.data OPTIONS (environment variables)
+#
+# Put any of these under `config.data` above. All are optional.
+# Source: charts/operator-options.md. Unset = operator built-in default.
+# #############################################################################
+#
+# config:
+#   data:
+#     # --- Certificates ---
+#     CERTIFICATE_DURATION: "90"          # Lifetime in days of generated certificates. Default 90.
+#     EXPIRING_CHECK_THRESHOLD: "7"       # Days before expiry a certificate is considered expiring. Default 7.
+#
+#     # --- Upgrade pacing ---
+#     CLUSTERS_ROLLOUT_DELAY: "0"         # Seconds between rolling out different clusters on operator upgrade. 0 = no delay.
+#     INSTANCES_ROLLOUT_DELAY: "0"        # Seconds between instances of the SAME cluster on operator upgrade. 0 = no delay.
+#     ENABLE_INSTANCE_MANAGER_INPLACE_UPDATES: "false"  # true = update instance manager in place, avoiding a rolling restart after operator upgrade.
+#
+#     # --- Scope ---
+#     WATCH_NAMESPACE: "ns-a,ns-b"        # Comma-separated namespaces to watch. Unset = all (cluster-wide).
+#
+#     # --- Images ---
+#     OPERATOR_IMAGE_NAME: ""             # Operator image used to bootstrap pods. Default = image used at install.
+#     POSTGRES_IMAGE_NAME: ""             # Default Postgres image for new Clusters. Default = operator-bundled.
+#     PGBOUNCER_IMAGE_NAME: ""            # Default PgBouncer image for new Poolers. Default = operator-bundled.
+#     PULL_SECRET_NAME: edb-pull-secret   # Extra pull secret (in operator namespace) used for downloading images.
+#
+#     # --- Propagation ---
+#     INHERITED_ANNOTATIONS: "categories" # Annotation names on a Cluster copied to all generated resources/pods.
+#     INHERITED_LABELS: "environment,app" # Label names on a Cluster copied to all generated resources/pods.
+#
+#     # --- Services / networking ---
+#     CREATE_ANY_SERVICE: "false"         # true = also create the "-any" service for each Cluster.
+#     KUBERNETES_CLUSTER_DOMAIN: "cluster.local"  # Domain suffix for service FQDNs.
+#     STANDBY_TCP_USER_TIMEOUT: "5000"    # TCP_USER_TIMEOUT (ms) for standby->primary replication connections. 0 = system default.
+#
+#     # --- Webhooks / metrics ---
+#     MANAGE_WEBHOOK_CONFIGURATIONS: "true"  # false when the CA bundle is injected externally (cert-manager cainjector, GitOps).
+#     ENABLE_WEBHOOK_NAMESPACE_SUFFIX: "false"  # true = look up webhook configs named with an -<OPERATOR_NAMESPACE> suffix
+#                                         # (multiple namespaced operators on one cluster). YOU must create those configs;
+#                                         # requires OPERATOR_NAMESPACE or the operator refuses to start.
+#     METRICS_CERT_DIR: ""                # Dir with tls.crt/tls.key; enables TLS on the operator metrics endpoint (:8080).
+#     MONITORING_QUERIES_CONFIGMAP: ""    # ConfigMap (operator ns, key `queries`) with default queries for all Clusters.
+#     MONITORING_QUERIES_SECRET: ""       # Same, from a Secret.
+#
+#     # --- Plugins / add-ons ---
+#     INCLUDE_PLUGINS: ""                 # Comma-separated plugins always included in every Cluster's reconciliation.
+#     EXTERNAL_BACKUP_ADDON_CONFIGURATION: ""  # Config for the external-backup-adapter add-on.
+#
+#     # --- EDB specific ---
+#     EDB_LICENSE_KEY: ""                 # Default license key (used if a Cluster has none). Prefer config.secret: true.
+#     ENABLE_REDWOOD_BY_DEFAULT: "false"  # Enable Redwood (Oracle) compatibility by default with EPAS.
+
+
+# #############################################################################
+# PART 4 - edb-database-cluster CHART  [DB only]
+#
+# NOT an operator: renders a Cluster resource (+ secrets, optional backup
+# credentials, optional sidecar ConfigMap). Requires an operator and its CRDs
+# to be installed already. Its own `nameOverride`, `fullnameOverride` and
+# `imagePullSecrets` keys are the same names as in PART 1.
+# #############################################################################
+
+# -- Name of the Cluster resource. Empty = chart fullname. [DB]
+clusterName: ""
+# -- Annotations on the Cluster resource. [DB]
+clusterAnnotations: {}
+# -- Labels on the Cluster resource. [DB]
+clusterLabels: {}
+
+cluster:
+  # -- Human-readable description. [DB]
+  description: "Example of cluster"
+  # -- PostgreSQL image for the instances. [DB]
+  imageName: docker.enterprisedb.com/k8s/postgresql:18.6-standard-ubi9
+  # -- Instance count: 1 primary + N-1 replicas. [DB]
+  instances: 3
+  # -- Seconds to wait for pods to become ready at startup. [DB]
+  startDelay: 300
+  # -- Seconds to wait for a clean shutdown. [DB]
+  stopDelay: 300
+  # -- How the primary is updated on rollouts: "unsupervised" (automatic
+  # switchover) or "supervised" (waits for you to promote manually). [DB]
+  primaryUpdateStrategy: unsupervised
+
+  postgresql:
+    # -- postgresql.conf parameters applied to every instance. Values are
+    # strings/numbers; some keys are operator-managed and rejected. [DB]
+    parameters:
+      shared_buffers: 256MB
+      pg_stat_statements.max: "10000"
+      pg_stat_statements.track: all
+      auto_explain.log_min_duration: "10s"
+    # -- Extra pg_hba.conf lines, appended after operator-generated rules. [DB]
+    pg_hba:
+      - host all all 10.244.0.0/16 md5
+
+  bootstrap:
+    initdb:
+      # -- Application database created at bootstrap. [DB]
+      database: app
+      # -- Owner of that database (login role). [DB]
+      owner: app
+
+  # -- Allow connecting as the `postgres` superuser using secrets.superuser. [DB]
+  enableSuperuserAccess: true
+
+  storage:
+    # -- StorageClass for PGDATA. Empty = cluster default. [DB]
+    storageClass: standard
+    # -- PGDATA volume size. [DB]
+    size: 1Gi
+
+  # -- Requests/limits for every instance pod. Set requests == limits for
+  # Guaranteed QoS (recommended for production). [DB]
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "1"
+    limits:
+      memory: "1Gi"
+      cpu: "2"
+
+  affinity:
+    # -- Spread instances using pod anti-affinity. [DB]
+    enablePodAntiAffinity: true
+    # -- Topology key for the rule above (e.g. topology.kubernetes.io/zone, kubernetes.io/hostname). [DB]
+    topologyKey: failure-domain.beta.kubernetes.io/zone
+
+  nodeMaintenanceWindow:
+    # -- Mark the cluster as inside a planned node maintenance window
+    # (stops the operator from failing over when nodes are drained). [DB]
+    inProgress: false
+    # -- Reuse the PVC instead of creating a new one when a node is drained. [DB]
+    reusePVC: false
+
+# -- (DB) Pull secrets for the PostgreSQL image; only for private registries.
+# Same key name as the operator's imagePullSecrets (PART 1), but applies to the
+# Cluster's pods, not to the operator. Pick one meaning per install.
+# imagePullSecrets:
+#   - name: private-registry-access
+
+# -- CNPG-I plugins registered on the Cluster. [DB]
+# This only registers the plugin; its controller must be deployed separately in
+# the operator's namespace. Use `plugins: []` if none is deployed, or Cluster
+# creation may fail validation.
+# parameters.configMapName must match sidecarScripts.name (default
+# "supercronic-scripts"). https://cloudnative-pg.io/documentation/current/cnpg-i/
+plugins:
+  - name: sidecar.tkdb.ai
+    enabled: true
+    parameters:
+      image: supercronic-sidecar:latest       # Placeholder - override with a real image.
+      configMapName: supercronic-scripts
+      # command: "while true; do /etc/sidecar/run.sh; sleep 60; done"
+      # env.LOG_LEVEL: debug
+      # mountPath: /etc/sidecar               # Where the ConfigMap is mounted.
+      # exportPath: ...                       # Used with logExport.
+
+# -- ConfigMap holding the crontab and scripts mounted into the sidecar. [DB]
+# Installing several Clusters in one namespace without overriding `name` makes
+# them collide on this ConfigMap.
+sidecarScripts:
+  # -- Create the ConfigMap. false = you manage it (e.g. shared across Clusters).
+  create: true
+  # -- Override name. Must equal plugins[].parameters.configMapName. Default "supercronic-scripts".
+  name: ""
+  # -- Crontab, standard 5-field cron syntax. Script paths must be under mountPath.
+  crontab: |
+    # minute hour day month weekday command
+    */15 * * * * /etc/sidecar/vacuum-analyze.sh
+  # -- Map of filename -> script content, mounted next to the crontab.
+  scripts:
+    vacuum-analyze.sh: |
+      #!/bin/sh
+      set -eu
+      psql -v ON_ERROR_STOP=1 -c "VACUUM (ANALYZE);"
+
+logExport:
+  # -- Create a Role/RoleBinding letting the Cluster's ServiceAccount `get`
+  # its own pods/log, for a sidecar that pulls Postgres logs via the Kubernetes
+  # API instead of reading CNPG's internal log pipes. [DB]
+  enabled: false
+
+secrets:
+  appUser:
+    # -- Create the app user's credentials Secret. [DB]
+    create: true
+    # -- Override Secret name. Default "<fullname>-app-user".
+    name: ""
+    # -- Username (should match cluster.bootstrap.initdb.owner).
+    username: app
+    # -- Password. Empty = random on install, preserved across upgrades.
+    password: ""
+  superuser:
+    # -- Create the superuser Secret. Only relevant if cluster.enableSuperuserAccess is true.
+    create: true
+    # -- Override Secret name. Default "<fullname>-superuser".
+    name: ""
+    # -- Superuser name, normally "postgres".
+    username: postgres
+    # -- Password. Empty = random on install, preserved across upgrades.
+    password: ""
+
+backup:
+  # -- Enable barmanObjectStore backups and create the credentials Secret. [DB]
+  enabled: false
+  # -- Retention for base backups and WAL, e.g. "30d". [DB]
+  retentionPolicy: "30d"
+  barmanObjectStore:
+    # -- Destination (bucket/prefix), e.g. s3://my-bucket/.
+    destinationPath: ""
+    # -- S3-compatible endpoint (MinIO, Ceph...). Empty = AWS S3.
+    endpointURL: ""
+    wal:
+      # -- WAL compression: gzip | bzip2 | snappy | (empty = none).
+      compression: gzip
+      # -- Server-side encryption: AES256 | aws:kms | (empty = bucket default).
+      encryption: AES256
+    data:
+      compression: gzip
+      encryption: AES256
+      # -- Force an immediate checkpoint before the base backup starts.
+      immediateCheckpoint: false
+      # -- Parallel upload jobs.
+      jobs: 2
+  credentials:
+    # -- Create the object-store credentials Secret.
+    create: true
+    # -- Override Secret name. Default "<fullname>-backup-creds".
+    name: ""
+    # -- Access key ID.
+    accessKeyId: ""
+    # -- Secret access key.
+    secretAccessKey: ""
