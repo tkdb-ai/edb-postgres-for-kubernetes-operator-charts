@@ -114,8 +114,10 @@ plugins:
 - name: sidecar.tkdb.ai
   enabled: true
   parameters:
-    image: <your-registry>/supercronic-sidecar:latest
+    image: supercronic-sidecar:latest
     configMapName: supercronic-scripts
+    # command: "while true; do /etc/sidecar/run.sh; sleep 60; done"
+    # env.LOG_LEVEL: debug
 
 # -- The ConfigMap referenced by plugins[].parameters.configMapName above -
 # holds the crontab and any scripts it invokes, mounted into the sidecar.
